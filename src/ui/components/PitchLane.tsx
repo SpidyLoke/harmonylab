@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { pitchEngine } from '../../audio/pitchEngine'
 import { centsOff, isNatural, midiToDisplayName } from '../../music/notes'
 import { classify, type PitchState } from '../../scoring/pitchState'
+import { laneStats } from './laneStats'
 
 export interface LaneTarget {
   /** Audio-clock seconds. Use -Infinity / Infinity for open-ended notes. */
@@ -75,9 +76,11 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
       const rect = canvas.getBoundingClientRect()
       width = rect.width
       height = rect.height
-      canvas.width = Math.round(width * dpr)
-      canvas.height = Math.round(height * dpr)
+      canvas.width = Math.max(1, Math.round(width * dpr))
+      canvas.height = Math.max(1, Math.round(height * dpr))
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
+      laneStats.resizes++
+      laneStats.dpr = dpr
     }
     const ro = new ResizeObserver(resize)
     ro.observe(canvas)
@@ -87,7 +90,32 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
       raf = requestAnimationFrame(draw)
       if (lastFrame) pitchEngine.noteDrawInterval(ts - lastFrame)
       lastFrame = ts
+      try {
+        // Belt and braces: if layout changed without a resize event (or the
+        // first measurement came back empty), fix the backing size now.
+        const dpr = Math.min(window.devicePixelRatio || 1, 3)
+        const rect = canvas.getBoundingClientRect()
+        if (
+          Math.abs(rect.width - width) > 0.5 ||
+          Math.abs(rect.height - height) > 0.5 ||
+          canvas.width !== Math.max(1, Math.round(rect.width * dpr))
+        ) {
+          resize()
+        }
+        laneStats.cssWidth = width
+        laneStats.cssHeight = height
+        laneStats.pixelWidth = canvas.width
+        laneStats.pixelHeight = canvas.height
+        if (!Number.isFinite(centre)) centre = 60
+        if (!Number.isFinite(span)) span = 12
+        drawFrame()
+        laneStats.framesDrawn++
+      } catch (err) {
+        laneStats.lastError = String((err as Error)?.stack ?? err).slice(0, 300)
+      }
+    }
 
+    const drawFrame = () => {
       const { getTargets, toleranceCents, pastSeconds } = propsRef.current
       const targets = getTargets()
       const now = pitchEngine.displayNow()

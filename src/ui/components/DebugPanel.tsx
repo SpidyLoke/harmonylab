@@ -2,6 +2,7 @@
 // rate, and the noise gate thresholds you can tune while singing.
 
 import { pitchEngine } from '../../audio/pitchEngine'
+import { laneStats } from './laneStats'
 import { useSettings } from '../../state/settings'
 import { useLive } from './useLive'
 
@@ -12,8 +13,11 @@ function fmt(ms: number | null) {
 export function DebugPanel() {
   const gate = useSettings((s) => s.gate)
   const update = useSettings((s) => s.update)
-  const data = useLive(() => ({ lat: pitchEngine.latency(), f: pitchEngine.latest, sr: pitchEngine.sampleRate() }), 6)
-  const { lat, f, sr } = data
+  const data = useLive(
+    () => ({ lat: pitchEngine.latency(), f: pitchEngine.latest, sr: pitchEngine.sampleRate(), lane: { ...laneStats } }),
+    6,
+  )
+  const { lat, f, sr, lane } = data
   const under = lat.totalMs < 50
 
   return (
@@ -43,7 +47,23 @@ export function DebugPanel() {
         <dd>{f ? f.clarity.toFixed(2) : 'n/a'}</dd>
         <dt className="text-muted">Loudness</dt>
         <dd>{f && Number.isFinite(f.db) ? `${f.db.toFixed(0)} dB` : 'n/a'}</dd>
+        <dt className="text-muted">Voice detected</dt>
+        <dd>{f ? (f.midi !== null ? 'yes' : 'no') : 'n/a'}</dd>
+        <dt className="text-muted">Lane size</dt>
+        <dd data-testid="lane-size">
+          {Math.round(lane.cssWidth)}×{Math.round(lane.cssHeight)} ({lane.pixelWidth}×{lane.pixelHeight} px, ×
+          {lane.dpr})
+        </dd>
+        <dt className="text-muted">Lane frames drawn</dt>
+        <dd data-testid="lane-frames">{lane.framesDrawn}</dd>
+        <dt className="text-muted">Build</dt>
+        <dd data-testid="build">{__APP_VERSION__}</dd>
       </dl>
+      {lane.lastError && (
+        <p className="mt-3 break-words font-mono text-xs text-bad" data-testid="lane-error">
+          Lane error: {lane.lastError}
+        </p>
+      )}
 
       <div className="mt-5 space-y-4">
         <label className="block">
