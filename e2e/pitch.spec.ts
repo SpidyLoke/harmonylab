@@ -9,7 +9,6 @@ const fixture = (name: string) => join(process.cwd(), 'e2e', 'fixtures', name)
 async function launchWithMic(file: string | null): Promise<Browser> {
   const args = ['--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream']
   if (file) args.push('--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${file}`)
-  else args.push('--deny-permission-prompts')
   // PW_CHROMIUM_PATH lets this run against a preinstalled Chromium.
   return chromium.launch({ args, executablePath: process.env.PW_CHROMIUM_PATH || undefined })
 }
@@ -70,10 +69,30 @@ test('ignores breath-like noise', async () => {
 })
 
 test('explains a blocked microphone', async () => {
+  // Simulate the user tapping Block. Headless browsers have no permission
+  // prompt, and newer builds reject with a different error than a real denial.
   const browser = await launchWithMic(null)
-  const page = await openPractice(browser)
-  await expect(page.getByRole('alert')).toBeVisible()
-  console.log('blocked mic:', await page.getByTestId('mic-error-detail').innerText())
+  const page = await browser.newPage()
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () =>
+      Promise.reject(new DOMException('Permission denied', 'NotAllowedError'))
+  })
+  await page.goto('http://localhost:4173/#/practice')
+  await page.getByRole('button', { name: 'Turn on microphone' }).click()
   await expect(page.getByRole('alert')).toHaveText('The microphone is blocked')
+  await expect(page.getByTestId('mic-error-detail')).toHaveText('Browser said: NotAllowedError: Permission denied')
+  await browser.close()
+})
+
+test('explains a missing microphone', async () => {
+  const browser = await launchWithMic(null)
+  const page = await browser.newPage()
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () =>
+      Promise.reject(new DOMException('Requested device not found', 'NotFoundError'))
+  })
+  await page.goto('http://localhost:4173/#/practice')
+  await page.getByRole('button', { name: 'Turn on microphone' }).click()
+  await expect(page.getByRole('alert')).toHaveText('No microphone found')
   await browser.close()
 })

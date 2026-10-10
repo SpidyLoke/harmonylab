@@ -52,6 +52,8 @@ export function toMicError(err: unknown): MicError {
     case 'TrackStartError':
     case 'AbortError':
       return new MicError('busy', detail)
+    case 'NotSupportedError':
+      return new MicError('unsupported', detail)
   }
   // Some browser versions use a generic name but say what happened.
   if (/permission|denied|not allowed|dismissed/i.test(message)) return new MicError('denied', detail)

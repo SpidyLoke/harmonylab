@@ -8,6 +8,7 @@ describe('toMicError', () => {
     expect(toMicError(err('NotAllowedError')).kind).toBe('denied')
     expect(toMicError(err('NotFoundError')).kind).toBe('notFound')
     expect(toMicError(err('NotReadableError')).kind).toBe('busy')
+    expect(toMicError(err('NotSupportedError')).kind).toBe('unsupported')
   })
 
   it('recognises a denial by its message when the name is generic', () => {
