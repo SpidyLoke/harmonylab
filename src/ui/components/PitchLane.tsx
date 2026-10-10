@@ -60,9 +60,9 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
 
   useEffect(() => {
     const canvas = canvasRef.current!
-    // Low-latency canvas where supported (Chrome): skips a compositor frame.
-    // Opaque, because transparent low-latency canvases flicker on some devices.
-    const g = canvas.getContext('2d', { desynchronized: true, alpha: false })!
+    // Plain 2D context. The low-latency (desynchronized) mode left the canvas
+    // blank on Chrome for Windows, and only saved one frame where it worked.
+    const g = canvas.getContext('2d', { alpha: false })!
     let raf = 0
     let lastFrame = 0
     let span = 12
