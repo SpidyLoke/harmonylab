@@ -65,7 +65,7 @@ function Card({ children }: { children: ReactNode }) {
 }
 
 export function MicGate({ children }: { children: ReactNode }) {
-  const { status, error } = useEngineState()
+  const { status, error, detail } = useEngineState()
 
   if (status === 'idle') {
     return (
@@ -103,6 +103,11 @@ export function MicGate({ children }: { children: ReactNode }) {
           {e.title}
         </h2>
         <div className="mt-3 text-ink/90">{e.body}</div>
+        {detail && (
+          <p className="mt-4 break-words font-mono text-xs text-muted" data-testid="mic-error-detail">
+            Browser said: {detail}
+          </p>
+        )}
         <Button variant="primary" className="mt-6 w-full" onClick={() => void pitchEngine.start()}>
           Try again
         </Button>

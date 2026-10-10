@@ -72,6 +72,8 @@ test('ignores breath-like noise', async () => {
 test('explains a blocked microphone', async () => {
   const browser = await launchWithMic(null)
   const page = await openPractice(browser)
+  await expect(page.getByRole('alert')).toBeVisible()
+  console.log('blocked mic:', await page.getByTestId('mic-error-detail').innerText())
   await expect(page.getByRole('alert')).toHaveText('The microphone is blocked')
   await browser.close()
 })

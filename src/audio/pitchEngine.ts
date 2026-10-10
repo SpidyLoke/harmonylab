@@ -18,6 +18,8 @@ export type EngineStatus = 'idle' | 'starting' | 'running' | 'paused' | 'error'
 export interface EngineState {
   status: EngineStatus
   error: MicErrorKind | null
+  /** Browser's own error name and message, shown in small print for troubleshooting. */
+  detail: string | null
 }
 
 export interface GateSettings {
@@ -51,7 +53,7 @@ export interface LatencyBreakdown {
 const HISTORY = 4096 // ≈ 20 s of readings
 
 export class PitchEngine {
-  private state: EngineState = { status: 'idle', error: null }
+  private state: EngineState = { status: 'idle', error: null, detail: null }
   private listeners = new Set<(s: EngineState) => void>()
 
   private stream: MediaStream | null = null
@@ -93,8 +95,8 @@ export class PitchEngine {
     return () => this.listeners.delete(fn)
   }
 
-  private set(status: EngineStatus, error: MicErrorKind | null = null) {
-    this.state = { status, error }
+  private set(status: EngineStatus, error: MicErrorKind | null = null, detail: string | null = null) {
+    this.state = { status, error, detail }
     this.listeners.forEach((fn) => fn(this.state))
   }
 
@@ -135,7 +137,8 @@ export class PitchEngine {
       this.set('running')
     } catch (err) {
       this.teardown()
-      this.set('error', toMicError(err).kind)
+      const e = toMicError(err)
+      this.set('error', e.kind, e.detail)
     }
   }
 
