@@ -9,6 +9,7 @@ export interface Settings {
   tier: ToleranceTier
   gate: GateSettings
   showDebug: boolean
+  showStaff: boolean
   /** Has the user seen the "what is a cent" explainer. */
   seenCents: boolean
   sandboxTarget: number
@@ -18,6 +19,7 @@ const DEFAULTS: Settings = {
   tier: 'beginner',
   gate: DEFAULT_GATE,
   showDebug: false,
+  showStaff: false,
   seenCents: false,
   sandboxTarget: 57, // A3: comfortable for most voices, men an octave up from their low range
 }
@@ -39,8 +41,8 @@ export const useSettings = create<SettingsStore>((set, get) => ({
   },
   update: (patch) => {
     set(patch)
-    const { tier, gate, showDebug, seenCents, sandboxTarget } = { ...get(), ...patch }
+    const { tier, gate, showDebug, showStaff, seenCents, sandboxTarget } = { ...get(), ...patch }
     if (patch.gate) pitchEngine.gate = patch.gate
-    void putSetting('settings', { tier, gate, showDebug, seenCents, sandboxTarget })
+    void putSetting('settings', { tier, gate, showDebug, showStaff, seenCents, sandboxTarget })
   },
 }))

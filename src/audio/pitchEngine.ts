@@ -55,6 +55,7 @@ const HISTORY = 4096 // ≈ 20 s of readings
 export class PitchEngine {
   private state: EngineState = { status: 'idle', error: null, detail: null }
   private listeners = new Set<(s: EngineState) => void>()
+  private frameListeners = new Set<(f: LiveFrame) => void>()
 
   private stream: MediaStream | null = null
   private source: MediaStreamAudioSourceNode | null = null
@@ -233,6 +234,7 @@ export class PitchEngine {
     const now = performance.now()
     this.latest = { t, midi, rawHz: d.hz, clarity: d.clarity, db: d.db }
     this.latestPerf = now
+    this.frameListeners.forEach((fn) => fn(this.latest!))
 
     // Delivery delay: how far the audio clock has moved on since the window ended.
     const ctx = getAudioContext()
@@ -247,6 +249,27 @@ export class PitchEngine {
     if (!this.latest) return 0
     const since = (performance.now() - this.latestPerf) / 1000
     return this.latest.t + Math.min(since, 0.1)
+  }
+
+  /** Called for every reading (≈190 a second). Keep listeners cheap. */
+  onFrame(fn: (f: LiveFrame) => void): () => void {
+    this.frameListeners.add(fn)
+    return () => this.frameListeners.delete(fn)
+  }
+
+  /** The last `n` smoothed pitches, oldest first (null = silence). */
+  recent(n: number): (number | null)[] {
+    const out: (number | null)[] = []
+    const count = Math.min(n, this.count)
+    for (let i = count; i > 0; i--) {
+      const m = this.midis[(this.head - i + HISTORY) % HISTORY]
+      out.push(m === m ? m : null)
+    }
+    return out
+  }
+
+  isRunning(): boolean {
+    return this.state.status === 'running'
   }
 
   /** Visit frames newer than `since`, oldest first. */

@@ -9,6 +9,8 @@ export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
   worker: { format: 'es' },
+  // VexFlow (staff view) is big but only loads when the staff is switched on.
+  build: { chunkSizeWarningLimit: 800 },
   define: {
     // Shown in the engine details panel so a report can be matched to a build.
     __APP_VERSION__: JSON.stringify(`${pkg.version}+${(process.env.GITHUB_SHA ?? 'local').slice(0, 7)}`),

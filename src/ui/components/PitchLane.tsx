@@ -14,7 +14,8 @@ export interface LaneTarget {
   start: number
   end: number
   midi: number
-  kind: 'harmony' | 'melody'
+  /** harmony: the singer's part. melody: other parts (faint). cue: a reference note to listen to. */
+  kind: 'harmony' | 'melody' | 'cue'
 }
 
 interface Props {
@@ -22,6 +23,8 @@ interface Props {
   getTargets: () => LaneTarget[]
   toleranceCents: number
   pastSeconds?: number
+  /** Measured latency: the voice line is drawn this much earlier so it lines up with the bars. */
+  voiceDelaySec?: number
   className?: string
 }
 
@@ -52,11 +55,11 @@ function activeHarmony(targets: LaneTarget[], t: number): LaneTarget | undefined
   return targets.find((x) => x.kind === 'harmony' && x.start <= t && t < x.end)
 }
 
-export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, className }: Props) {
+export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, voiceDelaySec = 0, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const propsRef = useRef({ getTargets, toleranceCents, pastSeconds })
+  const propsRef = useRef({ getTargets, toleranceCents, pastSeconds, voiceDelaySec })
   useLayoutEffect(() => {
-    propsRef.current = { getTargets, toleranceCents, pastSeconds }
+    propsRef.current = { getTargets, toleranceCents, pastSeconds, voiceDelaySec }
   })
 
   useEffect(() => {
@@ -116,9 +119,9 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
     }
 
     const drawFrame = () => {
-      const { getTargets, toleranceCents, pastSeconds } = propsRef.current
+      const { getTargets, toleranceCents, pastSeconds, voiceDelaySec } = propsRef.current
       const targets = getTargets()
-      const now = pitchEngine.displayNow()
+      const now = pitchEngine.displayNow() - voiceDelaySec
       const nowX = Math.round(width * (width < 500 ? 0.78 : 0.72))
       const pps = nowX / pastSeconds
       const xOf = (t: number) => nowX + (t - now) * pps
@@ -129,9 +132,14 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
       const centreTarget = focus?.midi ?? pitchEngine.latest?.midi ?? centre
       centre += (centreTarget - centre) * 0.12
       let maxDev = 0
-      pitchEngine.forEachSince(since, (_t, m) => {
+      pitchEngine.forEachSince(since + voiceDelaySec, (_t, m) => {
         if (m === m) maxDev = Math.max(maxDev, Math.abs(m - centre))
       })
+      // Keep every part on screen too: the drone or melody can sit a fifth or more away.
+      const viewEnd = now + (width - nowX) / pps
+      for (const t of targets) {
+        if (t.end >= since && t.start <= viewEnd) maxDev = Math.max(maxDev, Math.abs(t.midi - centre))
+      }
       const spanTarget = Math.min(30, Math.max(11, maxDev * 2 + 3))
       span += (spanTarget - span) * 0.08
       const semitonePx = height / span
@@ -167,14 +175,16 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
         const x1 = Math.min(width, xOf(target.end))
         if (x1 <= x0) continue
         const y = yOf(target.midi)
-        const harmony = target.kind === 'harmony'
+        const harmony = target.kind !== 'melody'
+        const cue = target.kind === 'cue'
         g.fillStyle = harmony ? COLOURS.spotFill : COLOURS.melodyFill
+        g.globalAlpha = cue ? 0.5 : 1
         roundRect(g, x0, y - bandPx / 2, x1 - x0, bandPx, Math.min(6, bandPx / 2))
         g.fill()
         g.strokeStyle = harmony ? COLOURS.spot : COLOURS.melody
-        g.globalAlpha = harmony ? 0.9 : 0.55
+        g.globalAlpha = harmony && !cue ? 0.9 : 0.55
         g.lineWidth = harmony ? 2 : 1.5
-        g.setLineDash(harmony ? [] : [4, 4])
+        g.setLineDash(harmony && !cue ? [] : [4, 4])
         g.beginPath()
         g.moveTo(x0, y)
         g.lineTo(x1, y)
@@ -182,8 +192,8 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
         g.setLineDash([])
         g.globalAlpha = 1
         g.fillStyle = harmony ? COLOURS.spot : COLOURS.melody
-        g.font = harmony ? '600 13px ui-sans-serif, system-ui, sans-serif' : '12px ui-sans-serif, system-ui, sans-serif'
-        const label = harmony ? `${midiToDisplayName(target.midi)}  you` : `${midiToDisplayName(target.midi)}  melody`
+        g.font = harmony && !cue ? '600 13px ui-sans-serif, system-ui, sans-serif' : '12px ui-sans-serif, system-ui, sans-serif'
+        const label = `${midiToDisplayName(target.midi)}  ${cue ? 'listen' : harmony ? 'you' : 'melody'}`
         // Current and upcoming bars are labelled just past the now line;
         // finished bars at their start, only if the label fits.
         const textW = g.measureText(label).width
@@ -214,7 +224,8 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
       }
       g.lineCap = 'round'
       g.lineJoin = 'round'
-      pitchEngine.forEachSince(since, (t, m) => {
+      pitchEngine.forEachSince(since + voiceDelaySec, (rawT, m) => {
+        const t = rawT - voiceDelaySec
         const voiced = m === m
         if (voiced && prevM === prevM && t - prevT < 0.05 && Math.abs(m - prevM) < 1.5) {
           const s = stateAt(t, m)
@@ -241,10 +252,11 @@ export function PitchLane({ getTargets, toleranceCents, pastSeconds = 4, classNa
       // Head marker at the newest reading: tick when in tune, a triangle
       // pointing the way to move otherwise (filled = close, outline = off).
       const latest = pitchEngine.latest
-      if (latest && latest.midi !== null && now - latest.t < 0.15) {
-        const x = xOf(latest.t)
+      if (latest && latest.midi !== null && now - (latest.t - voiceDelaySec) < 0.15) {
+        const lt = latest.t - voiceDelaySec
+        const x = xOf(lt)
         const y = yOf(latest.midi)
-        const target = activeHarmony(targets, latest.t)
+        const target = activeHarmony(targets, lt)
         const c = target ? classify(centsOff(latest.midi, target.midi), toleranceCents) : null
         drawHead(g, x, y, c?.state ?? 'none', c?.direction ?? null)
       }
