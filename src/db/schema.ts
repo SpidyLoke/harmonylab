@@ -90,6 +90,12 @@ export interface SongRow {
   editedParts: PartKind[]
   selectedPart: PartKind
   backing: BackingRef | null
+  /** Words in the lyrics text format (see music/lyrics.ts), timed to the melody. */
+  lyricsText?: string
+  /** For rounds: beats before the second voice comes in. */
+  roundOffset?: number
+  /** Set when the song came from the built-in library, so it isn't added twice. */
+  builtinId?: string
   source: 'record' | 'midi' | 'manual' | 'builtin'
   createdAt: number
   updatedAt: number

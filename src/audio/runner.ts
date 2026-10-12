@@ -185,6 +185,14 @@ export class PieceRunner {
     this.disposables.push(player)
   }
 
+  /** Song position (beats) at audio time `t`, following loops. */
+  beatAt(t: number): number {
+    const first = this.passes[0]
+    if (!first || t < first.startSec) return this.range.a + (t - (first?.startSec ?? t)) / this.spb
+    const p = this.passes.find((x) => x.startSec <= t && t < x.endSec) ?? this.passes[this.passes.length - 1]
+    return this.range.a + (t - p.startSec) / this.spb
+  }
+
   /** Time of beat 0 of the first pass. */
   get startSec(): number {
     return this.passes[0]?.startSec ?? 0

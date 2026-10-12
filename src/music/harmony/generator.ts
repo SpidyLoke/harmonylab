@@ -14,9 +14,11 @@
 import { chordPcs, diatonicShift, mod12, parseChord, scalePcs, type Chord } from '../theory'
 import type { ChordEvent, Key, Note } from '../types'
 
-export type PartKind = 'thirdAbove' | 'thirdBelow' | 'sixthBelow' | 'chordBelow' | 'chordAbove' | 'low'
+export type PartKind = 'melody' | 'round' | 'thirdAbove' | 'thirdBelow' | 'sixthBelow' | 'chordBelow' | 'chordAbove' | 'low'
 
 export const PART_LABELS: Record<PartKind, string> = {
+  melody: 'Melody (sing along)',
+  round: 'Second voice of the round',
   thirdAbove: 'Third above',
   thirdBelow: 'Third below',
   sixthBelow: 'Sixth below',
@@ -29,6 +31,8 @@ export interface HarmonyOptions {
   key: Key
   beatsPerBar: number
   chords?: ChordEvent[]
+  /** For rounds: beats before the second voice comes in. */
+  roundOffset?: number
 }
 
 /** Interval classes that clash when sounded against the melody. */
@@ -145,6 +149,11 @@ function lowPart(upper: Note[], opts: HarmonyOptions, lengthBeats: number): Note
 
 export function generatePart(kind: PartKind, melody: Note[], opts: HarmonyOptions): Note[] {
   switch (kind) {
+    case 'melody':
+      return melody.map((n) => ({ ...n }))
+    case 'round':
+      // The same tune, starting later: the oldest kind of harmony.
+      return melody.map((n) => ({ ...n, start: n.start + (opts.roundOffset ?? opts.beatsPerBar * 2) }))
     case 'thirdAbove':
       return parallel(melody, 2, 0, opts)
     case 'thirdBelow':
@@ -164,9 +173,10 @@ export function generatePart(kind: PartKind, melody: Note[], opts: HarmonyOption
   }
 }
 
-/** Which parts make sense for this song. */
-export function availableParts(hasChords: boolean): PartKind[] {
-  return hasChords
+/** Harmony parts that make sense for this song (the melody itself is always available too). */
+export function availableParts(hasChords: boolean, isRound = false): PartKind[] {
+  const base: PartKind[] = hasChords
     ? ['thirdAbove', 'thirdBelow', 'sixthBelow', 'chordBelow', 'chordAbove']
     : ['thirdAbove', 'thirdBelow', 'sixthBelow']
+  return isRound ? ['round', ...base] : base
 }

@@ -2,8 +2,10 @@
 // into notes in beats. Chords are guessed from the other tracks.
 
 import { Midi } from '@tonejs/midi'
+import { parseMidi } from 'midi-file'
 import { inferChords } from './chordInfer'
 import { detectKey } from './keyDetect'
+import { lyricsFromMidiEvents } from './lyrics'
 import type { ChordEvent, Key, Note } from './types'
 
 export interface MidiTrackSummary {
@@ -26,6 +28,31 @@ export interface MidiImport {
   suggestedTrack: number
   /** Notes per track, in beats. */
   trackNotes: Note[][]
+  ppq: number
+  /** Lyric and text events from every track (karaoke files keep words here). */
+  lyricEvents: { ticks: number; text: string }[]
+}
+
+/** Text and lyric events from all tracks, with absolute ticks. */
+function readLyricEvents(data: ArrayBuffer): { ticks: number; text: string }[] {
+  try {
+    const parsed = parseMidi(new Uint8Array(data))
+    const byTrack = parsed.tracks.map((track) => {
+      let ticks = 0
+      const out: { ticks: number; text: string; type: string }[] = []
+      for (const e of track) {
+        ticks += e.deltaTime
+        if ((e.type === 'lyrics' || e.type === 'text') && 'text' in e) out.push({ ticks, text: e.text, type: e.type })
+      }
+      return out
+    })
+    // Prefer proper lyric events; otherwise the track with the most text events (karaoke style).
+    const lyrics = byTrack.flat().filter((e) => e.type === 'lyrics')
+    const pick = lyrics.length >= 4 ? lyrics : [...byTrack].sort((a, b) => b.length - a.length)[0] ?? []
+    return pick.map(({ ticks, text }) => ({ ticks, text })).sort((a, b) => a.ticks - b.ticks)
+  } catch {
+    return []
+  }
 }
 
 export function readMidi(data: ArrayBuffer): MidiImport {
@@ -58,7 +85,7 @@ export function readMidi(data: ArrayBuffer): MidiImport {
       isDrums: t.instrument?.percussion ?? t.channel === 9,
     }
   })
-  return { bpm, beatsPerBar, tracks, suggestedTrack: suggestMelodyTrack(tracks), trackNotes }
+  return { bpm, beatsPerBar, tracks, suggestedTrack: suggestMelodyTrack(tracks), trackNotes, ppq, lyricEvents: readLyricEvents(data) }
 }
 
 /** Highest, mostly single-line, non-drum track with a fair number of notes. */
@@ -89,6 +116,10 @@ export interface ImportedSong {
   key: Key
   bpm: number
   beatsPerBar: number
+  /** Beat in the MIDI file where the song (bar of the first melody note) starts. */
+  firstBeat: number
+  /** Words, if the file carried them (karaoke files). */
+  lyricsText: string | null
 }
 
 /** Builds a song from the chosen melody track; chords come from everything else. */
@@ -106,5 +137,12 @@ export function songFromMidi(imp: MidiImport, melodyTrack: number): ImportedSong
   const key = detectKey([...melody, ...accompaniment])
   const source = accompaniment.length >= 8 ? accompaniment : melody
   const chords = inferChords(source, key, imp.beatsPerBar, Math.ceil(length / imp.beatsPerBar) * imp.beatsPerBar)
-  return { melody, chords, key, bpm: imp.bpm, beatsPerBar: imp.beatsPerBar }
+  const lyricsText = lyricsFromMidiEvents(imp.lyricEvents, imp.ppq, melody, firstBar)
+  return { melody, chords, key, bpm: imp.bpm, beatsPerBar: imp.beatsPerBar, firstBeat: firstBar, lyricsText }
+}
+
+/** Every note start in the file (all tracks, drums included), in seconds at the file's tempo. */
+export function midiOnsetsSec(imp: MidiImport): number[] {
+  const spb = 60 / imp.bpm
+  return [...new Set(imp.trackNotes.flat().map((n) => Math.round(n.start * 1000) / 1000))].sort((a, b) => a - b).map((b) => b * spb)
 }

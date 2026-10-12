@@ -17,6 +17,7 @@ import { Button, Segmented } from './Button'
 import { PitchLane, type LaneTarget } from './PitchLane'
 import { useLive } from './useLive'
 import { StaffView } from './StaffView'
+import { LyricsBar } from './LyricsBar'
 
 export interface TakeViewProps {
   piece: Piece
@@ -160,6 +161,8 @@ export function TakeView(props: TakeViewProps) {
           className={`block w-full touch-none ${props.compact ? 'h-[38vh] min-h-56' : 'h-[46vh] min-h-64'}`}
         />
       </div>
+
+      {piece.lyrics && piece.lyrics.length > 0 && <LyricsBar lines={piece.lyrics} runner={runner} />}
 
       <TakeReadout runner={runner} toleranceCents={toleranceCents} latency={latency} running={run !== 'idle'} demo={run === 'demo'} />
 

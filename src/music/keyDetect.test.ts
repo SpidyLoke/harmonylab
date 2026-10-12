@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { detectKey } from './keyDetect'
 import { parseMelody } from './notation'
-import { BUILT_IN_SONGS } from './songs'
+import { ALL_BUILT_IN_SONGS } from './songs'
 import { scalePcs } from './theory'
 
 describe('detectKey', () => {
@@ -18,7 +18,7 @@ describe('detectKey', () => {
   })
 
   it('agrees with the built-in songs (a relative major/minor counts: same notes)', () => {
-    for (const s of BUILT_IN_SONGS) {
+    for (const s of ALL_BUILT_IN_SONGS) {
       expect(scalePcs(detectKey(s.melody, s.chords)).sort(), s.title).toEqual(scalePcs(s.key).sort())
     }
   })

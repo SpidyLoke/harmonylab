@@ -7,25 +7,27 @@ import { FrameRecorder } from '../../audio/checks'
 import { getAudioContext, unlockAudio } from '../../audio/context'
 import { makeClickSynth, sliderToDb } from '../../audio/instruments'
 import { estimateTempo, framesToNotes, quantize } from '../../music/transcribe'
-import { readMidi, songFromMidi, type MidiImport } from '../../music/midiImport'
+import { midiOnsetsSec, readMidi, songFromMidi, type MidiImport } from '../../music/midiImport'
+import { candidateStretches, syncMidiToAudio } from '../../music/syncMidi'
+import { alignLyrics } from '../../music/lyrics'
 import { inferChords } from '../../music/chordInfer'
 import { detectKey } from '../../music/keyDetect'
 import { endOf } from '../../music/notation'
 import { midiToDisplayName } from '../../music/notes'
 import type { Note } from '../../music/types'
-import { addBuiltInToLibrary, analyseBacking, createSong, loadBackingBuffer, storeBackingFile } from '../../songs/library'
-import { BUILT_IN_SONGS } from '../../music/songs'
+import { addBuiltInToLibrary, analyseBacking, createSong, loadBackingBuffer, mixdown, storeBackingFile } from '../../songs/library'
+import { ALL_BUILT_IN_SONGS } from '../../music/songs'
 import { Button, Segmented } from '../components/Button'
 import { MicGate } from '../components/MicGate'
 import { PitchLane } from '../components/PitchLane'
 
-type Way = 'record' | 'midi' | 'manual' | 'builtin'
+type Way = 'record' | 'hit' | 'manual' | 'builtin'
 
 export function NewSongScreen() {
   const [way, setWay] = useState<Way>('record')
   return (
     <div className="mx-auto max-w-3xl px-4 pb-16">
-      <h1 className="pt-4 text-2xl font-bold">New song</h1>
+      <h1 className="pt-4 text-2xl font-bold">Add a song</h1>
       <p className="mt-1 text-muted">Get the melody in, and HarmonyLab writes the harmony parts for you.</p>
       <div className="mt-4">
         <Segmented<Way>
@@ -34,7 +36,7 @@ export function NewSongScreen() {
           onChange={setWay}
           options={[
             { value: 'record', label: 'Sing it' },
-            { value: 'midi', label: 'MIDI file' },
+            { value: 'hit', label: 'Bring a hit' },
             { value: 'manual', label: 'Type it in' },
             { value: 'builtin', label: 'Built-in' },
           ]}
@@ -46,7 +48,7 @@ export function NewSongScreen() {
             <RecordMelody />
           </MicGate>
         )}
-        {way === 'midi' && <MidiImportPanel />}
+        {way === 'hit' && <HitPanel />}
         {way === 'manual' && <ManualStart />}
         {way === 'builtin' && <BuiltInPicker />}
       </div>
@@ -251,74 +253,172 @@ function RecordMelody() {
   )
 }
 
-function MidiImportPanel() {
+function HitPanel() {
   const navigate = useNavigate()
   const [imp, setImp] = useState<MidiImport | null>(null)
   const [name, setName] = useState('')
   const [track, setTrack] = useState(0)
+  const [audio, setAudio] = useState<{ file: File; fileId: number; buffer: AudioBuffer } | null>(null)
+  const [sync, setSync] = useState<{ offsetSec: number; bpm: number; confidence: number } | null>(null)
+  const [lyrics, setLyrics] = useState('')
+  const [lyricsFromFile, setLyricsFromFile] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const load = async (f: File) => {
+  const song = imp ? songFromMidi(imp, track) : null
+
+  const loadMidi = async (f: File) => {
     setError(null)
     try {
       const r = readMidi(await f.arrayBuffer())
       setImp(r)
       setTrack(r.suggestedTrack)
-      setName(f.name.replace(/\.midi?$/i, ''))
+      setName((n) => n || f.name.replace(/\.(midi?|kar)$/i, ''))
+      const s = songFromMidi(r, r.suggestedTrack)
+      if (s.lyricsText) {
+        setLyrics(s.lyricsText)
+        setLyricsFromFile(true)
+      }
     } catch {
-      setError("Couldn't read that file. Is it a .mid file?")
+      setError("Couldn't read that file. Is it a .mid or .kar file?")
     }
   }
 
+  const loadAudio = async (f: File) => {
+    setError(null)
+    setBusy('Reading the audio…')
+    try {
+      const fileId = await storeBackingFile(f)
+      const buffer = await loadBackingBuffer(fileId)
+      if (!buffer) throw new Error('decode')
+      setAudio({ file: f, fileId, buffer })
+      setName((n) => n || f.name.replace(/\.[a-z0-9]+$/i, ''))
+    } catch {
+      setError("Couldn't read that audio file. Try an MP3, WAV or M4A.")
+    }
+    setBusy(null)
+  }
+
+  // Line the MIDI up with the audio whenever both are in.
+  useEffect(() => {
+    if (!imp || !audio || !song) return
+    let cancelled = false
+    setBusy('Lining the MIDI up with the audio…')
+    // Let the message paint before the number crunching.
+    setTimeout(() => {
+      if (cancelled) return
+      const beat = analyseBacking(audio.buffer, imp.beatsPerBar)
+      const mono = mixdown(audio.buffer)
+      const r = syncMidiToAudio(midiOnsetsSec(imp), mono, audio.buffer.sampleRate, { stretches: candidateStretches(imp.bpm, beat.bpm) })
+      const bpm = imp.bpm / r.stretch
+      setSync({ offsetSec: r.offsetSec + (song.firstBeat * 60) / bpm, bpm, confidence: r.confidence })
+      setBusy(null)
+    }, 50)
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imp, audio, track])
+
+  const check = song && lyrics.trim() ? alignLyrics(song.melody, lyrics) : null
+
   const save = async () => {
-    if (!imp) return
-    const s = songFromMidi(imp, track)
-    if (!s.melody.length) return setError('That track has no notes.')
-    const id = await createSong({ title: name || 'Imported song', bpm: s.bpm, beatsPerBar: s.beatsPerBar, melody: s.melody, chords: s.chords, key: s.key, source: 'midi' })
-    navigate(`/songs/${id}`)
+    if (!song || !song.melody.length) return setError('That track has no notes.')
+    const id = await createSong({
+      title: name.trim() || 'My song',
+      bpm: Math.round(sync?.bpm ?? song.bpm),
+      beatsPerBar: song.beatsPerBar,
+      melody: song.melody,
+      chords: song.chords,
+      key: song.key,
+      source: 'midi',
+      lyricsText: lyrics.trim() || undefined,
+      selectedPart: 'melody',
+      backing: audio && sync ? { fileId: audio.fileId, name: audio.file.name, offsetSec: sync.offsetSec, bpmDetected: sync.bpm, confidence: sync.confidence } : null,
+    })
+    navigate(`/songs/${id}/practice`)
   }
 
   return (
-    <section className="space-y-4 rounded-3xl border border-line bg-surface p-5">
-      <label className="block text-sm">
-        MIDI file (.mid)
-        <input type="file" accept=".mid,.midi,audio/midi" onChange={(e) => e.target.files?.[0] && void load(e.target.files[0])} className="mt-2 block w-full" />
-      </label>
-      {imp && (
-        <>
-          <TitleInput value={name} onChange={setName} />
-          <fieldset>
-            <legend className="mb-2 text-sm text-muted">Which track is the melody? (Best guess is selected.)</legend>
-            <div className="space-y-2">
-              {imp.tracks
-                .filter((t) => t.noteCount > 0)
-                .map((t) => (
-                  <label key={t.index} className={`flex min-h-12 items-center gap-3 rounded-2xl border p-3 ${track === t.index ? 'border-spot bg-spot/10' : 'border-line'}`}>
-                    <input type="radio" name="track" checked={track === t.index} onChange={() => setTrack(t.index)} className="h-5 w-5 accent-[var(--color-spot)]" />
-                    <span className="flex-1">
-                      <b>{t.name}</b> {t.instrument && <span className="text-muted">· {t.instrument}</span>}
-                      {t.isDrums && <span className="text-muted"> · drums</span>}
-                      <span className="block text-xs text-muted">
-                        {t.noteCount} notes · {midiToDisplayName(t.lowest)} to {midiToDisplayName(t.highest)}
-                        {t.polyphony > 0.3 ? ' · chords' : ''}
+    <section className="space-y-5 rounded-3xl border border-line bg-surface p-5">
+      <p className="text-sm text-muted">
+        For songs you love that can't ship in the app. Bring the files yourself; they stay on this device.
+      </p>
+      <TitleInput value={name} onChange={setName} />
+
+      <div>
+        <h3 className="font-semibold">1. The tune: a MIDI or karaoke file</h3>
+        <p className="text-sm text-muted">Karaoke files (.kar) are best: they carry the words too. The melody track is picked for you.</p>
+        <input type="file" accept=".mid,.midi,.kar,audio/midi" onChange={(e) => e.target.files?.[0] && void loadMidi(e.target.files[0])} className="mt-2 block w-full text-sm" aria-label="MIDI or karaoke file" />
+        {imp && song && (
+          <div className="mt-2 text-sm">
+            <span className="text-good">✓</span> {song.melody.length} melody notes, {imp.bpm} bpm, chords guessed.
+            <details className="mt-1">
+              <summary className="cursor-pointer text-muted">Wrong tune? Pick another track</summary>
+              <div className="mt-2 space-y-2">
+                {imp.tracks
+                  .filter((t) => t.noteCount > 0 && !t.isDrums)
+                  .map((t) => (
+                    <label key={t.index} className={`flex min-h-11 items-center gap-3 rounded-2xl border p-2 ${track === t.index ? 'border-spot bg-spot/10' : 'border-line'}`}>
+                      <input type="radio" name="track" checked={track === t.index} onChange={() => setTrack(t.index)} className="h-5 w-5 accent-[var(--color-spot)]" />
+                      <span>
+                        <b>{t.name}</b> <span className="text-muted">· {t.noteCount} notes · {midiToDisplayName(t.lowest)} to {midiToDisplayName(t.highest)}</span>
                       </span>
-                    </span>
-                    {t.index === imp.suggestedTrack && <span className="text-xs text-spot">suggested</span>}
-                  </label>
-                ))}
-            </div>
-          </fieldset>
-          <p className="text-sm text-muted">Tempo {imp.bpm} bpm. The key and chords are worked out from the other tracks.</p>
-          <Button variant="primary" onClick={() => void save()}>
-            Import and edit
-          </Button>
-        </>
-      )}
+                    </label>
+                  ))}
+              </div>
+            </details>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3 className="font-semibold">2. The song's audio (optional)</h3>
+        <p className="text-sm text-muted">Sing over the real track. HarmonyLab lines it up with the MIDI by itself.</p>
+        <input type="file" accept="audio/*" onChange={(e) => e.target.files?.[0] && void loadAudio(e.target.files[0])} className="mt-2 block w-full text-sm" aria-label="Song audio" />
+        {sync && (
+          <p className={`mt-2 text-sm ${sync.confidence < 0.25 ? 'text-near' : ''}`}>
+            {sync.confidence < 0.25 ? '▲ Synced, but not sure: check it in practice and nudge it in the editor if needed. ' : '✓ Synced. '}
+            The song starts {sync.offsetSec.toFixed(1)} s into the track.
+          </p>
+        )}
+      </div>
+
+      <div>
+        <h3 className="font-semibold">3. The words (optional)</h3>
+        <p className="text-sm text-muted">
+          {lyricsFromFile ? '✓ Words found in the file. Fix anything below.' : 'Paste the lyrics, one line per line. Hyphens split syllables (to-ge-ther).'}
+        </p>
+        <textarea
+          value={lyrics}
+          onChange={(e) => {
+            setLyrics(e.target.value)
+            setLyricsFromFile(false)
+          }}
+          rows={5}
+          className="mt-2 w-full rounded-2xl border border-line bg-surface-2 p-3 font-mono text-sm"
+          aria-label="Lyrics"
+        />
+        {check && (
+          <p className={`mt-1 text-sm ${check.unusedNotes || check.unusedTokens ? 'text-near' : 'text-good'}`}>
+            {check.unusedTokens
+              ? `▲ ${check.unusedTokens} more syllables than notes.`
+              : check.unusedNotes
+                ? `▲ ${check.unusedNotes} notes without words.`
+                : '✓ Every note has a syllable.'}
+          </p>
+        )}
+      </div>
+
+      {busy && <p className="text-muted">{busy}</p>}
       {error && (
         <p className="text-near" role="alert">
           {error}
         </p>
       )}
+      <Button variant="primary" disabled={!song || !!busy} onClick={() => void save()}>
+        Save and sing
+      </Button>
     </section>
   )
 }
@@ -350,7 +450,7 @@ function BuiltInPicker() {
   const navigate = useNavigate()
   return (
     <ul className="space-y-3">
-      {BUILT_IN_SONGS.map((s) => (
+      {ALL_BUILT_IN_SONGS.map((s) => (
         <li key={s.id} className="flex items-center gap-4 rounded-3xl border border-line bg-surface p-4">
           <span className="flex-1">
             <b>{s.title}</b>

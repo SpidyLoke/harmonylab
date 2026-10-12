@@ -24,6 +24,20 @@ export interface ChordEvent {
   symbol: string
 }
 
+export interface LyricSyllable {
+  start: number
+  end: number
+  text: string
+  /** True when the next syllable is part of the same word (no space before it). */
+  joinNext: boolean
+}
+
+export interface LyricLine {
+  start: number
+  end: number
+  syllables: LyricSyllable[]
+}
+
 /**
  * Everything a practice take needs: what plays, what the singer sings, and
  * how it is timed. Built by the curriculum, the song editor and the ear drills.
@@ -42,4 +56,6 @@ export interface Piece {
   cues?: Note[]
   /** Chord pad underneath, if any. */
   chords?: ChordEvent[]
+  /** Words, timed to the melody, for singing along. */
+  lyrics?: LyricLine[]
 }

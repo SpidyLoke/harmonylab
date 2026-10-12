@@ -101,3 +101,30 @@ test('progress page exports a backup file', async () => {
   expect(errors).toEqual([])
   await browser.close()
 })
+
+test('sing along: a library song opens with words on screen and the melody part', async () => {
+  const browser = await launch()
+  const { page, errors } = await openSetUp(browser, '/songs')
+  await page.getByTestId('singalong-twinkle').click()
+  await expect(page).toHaveURL(/#\/songs\/\d+\/practice/)
+  await expect(page.getByRole('combobox').first()).toHaveValue('melody')
+  await page.getByRole('button', { name: 'Turn on microphone' }).click()
+  await expect(page.getByTestId('lyrics')).toContainText('Twinkle twinkle little star')
+  await expect(page.getByTestId('lyrics')).toContainText('how I wonder what you are')
+  // Adding it again opens the same copy rather than a duplicate.
+  await page.goto(`${BASE}/songs`)
+  await page.getByTestId('singalong-twinkle').click()
+  await page.goto(`${BASE}/songs`)
+  await expect(page.getByRole('link', { name: /Twinkle, Twinkle, Little Star/ })).toHaveCount(1)
+  expect(errors).toEqual([])
+  await browser.close()
+})
+
+test('rounds offer the second voice', async () => {
+  const browser = await launch()
+  const { page, errors } = await openSetUp(browser, '/songs')
+  await page.getByTestId('singalong-frere-jacques').click()
+  await expect(page.getByRole('combobox').first()).toHaveValue('round')
+  expect(errors).toEqual([])
+  await browser.close()
+})

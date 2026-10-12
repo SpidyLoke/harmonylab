@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { chordAt, clashesWithChord, clashesWithMelody, generatePart, isStrongBeat } from './generator'
 import { inKey, mod12 } from '../theory'
-import { BUILT_IN_SONGS } from '../songs'
+import { ALL_BUILT_IN_SONGS, BUILT_IN_SONGS } from '../songs'
 import { parseChordChart, parseMelody } from '../notation'
 import { nameToMidi as n } from '../notes'
 import type { Key } from '../types'
@@ -98,15 +98,25 @@ describe('chord-aware parts', () => {
 })
 
 describe('every built-in song, every part', () => {
-  for (const s of BUILT_IN_SONGS) {
+  for (const s of ALL_BUILT_IN_SONGS) {
     for (const kind of ['thirdAbove', 'thirdBelow', 'sixthBelow', 'chordBelow', 'chordAbove'] as const) {
       it(`${s.title}: ${kind} has no strong-beat clash with the melody`, () => {
-        const part = generatePart(kind, s.melody, { key: s.key, beatsPerBar: 4, chords: s.chords })
+        const part = generatePart(kind, s.melody, { key: s.key, beatsPerBar: s.beatsPerBar, chords: s.chords })
         expect(part.length).toBe(s.melody.length)
         part.forEach((x, i) => {
-          if (isStrongBeat(x.start, 4)) expect(clashesWithMelody(x.midi, s.melody[i].midi)).toBe(false)
+          if (isStrongBeat(x.start, s.beatsPerBar)) expect(clashesWithMelody(x.midi, s.melody[i].midi)).toBe(false)
         })
       })
     }
   }
+})
+
+describe('melody and round parts', () => {
+  it('melody part is the tune itself; round part is the tune, later', () => {
+    const tune = parseMelody('C4/1 D4/1 E4/2')
+    expect(generatePart('melody', tune, { key: C, beatsPerBar: 4 })).toEqual(tune)
+    const round = generatePart('round', tune, { key: C, beatsPerBar: 4, roundOffset: 8 })
+    expect(round.map((n) => n.start)).toEqual([8, 9, 10])
+    expect(round.map((n) => n.midi)).toEqual(tune.map((n) => n.midi))
+  })
 })

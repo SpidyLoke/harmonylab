@@ -7,6 +7,7 @@ import { availableParts, generatePart, type PartKind } from '../music/harmony/ge
 import { detectKey } from '../music/keyDetect'
 import { endOf } from '../music/notation'
 import { builtInSong } from '../music/songs'
+import { alignLyrics } from '../music/lyrics'
 import { fitPieceToRange } from '../music/transpose'
 import type { ChordEvent, Key, Note, Piece } from '../music/types'
 import { db, type SongRow } from '../db/schema'
@@ -20,6 +21,10 @@ export interface SongDraft {
   key?: Key
   source: SongRow['source']
   backing?: SongRow['backing']
+  lyricsText?: string
+  roundOffset?: number
+  builtinId?: string
+  selectedPart?: PartKind
 }
 
 /** Fills in key and parts, then saves. Returns the new id. */
@@ -35,8 +40,11 @@ export async function createSong(d: SongDraft): Promise<number> {
     chords,
     parts: {},
     editedParts: [],
-    selectedPart: 'thirdAbove',
+    selectedPart: d.selectedPart ?? 'thirdAbove',
     backing: d.backing ?? null,
+    lyricsText: d.lyricsText,
+    roundOffset: d.roundOffset,
+    builtinId: d.builtinId,
     source: d.source,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -46,10 +54,12 @@ export async function createSong(d: SongDraft): Promise<number> {
 }
 
 /** Generates every part that makes sense, keeping any the singer hand-edited. */
-export function regenerateParts(song: Pick<SongRow, 'melody' | 'chords' | 'key' | 'beatsPerBar' | 'parts' | 'editedParts'>): SongRow['parts'] {
-  const opts = { key: song.key, beatsPerBar: song.beatsPerBar, chords: song.chords.length ? song.chords : undefined }
+export function regenerateParts(
+  song: Pick<SongRow, 'melody' | 'chords' | 'key' | 'beatsPerBar' | 'parts' | 'editedParts' | 'roundOffset'>,
+): SongRow['parts'] {
+  const opts = harmonyOptions(song)
   const out: SongRow['parts'] = {}
-  for (const kind of availableParts(song.chords.length > 0)) {
+  for (const kind of availableParts(song.chords.length > 0, !!song.roundOffset)) {
     out[kind] = song.editedParts.includes(kind) && song.parts[kind] ? song.parts[kind] : generatePart(kind, song.melody, opts)
   }
   return out
@@ -59,9 +69,33 @@ export async function saveSong(song: SongRow): Promise<void> {
   await db.songs.put({ ...song, updatedAt: Date.now() })
 }
 
+function harmonyOptions(song: Pick<SongRow, 'key' | 'beatsPerBar' | 'chords' | 'roundOffset'>) {
+  return {
+    key: song.key,
+    beatsPerBar: song.beatsPerBar,
+    chords: song.chords.length ? song.chords : undefined,
+    roundOffset: song.roundOffset,
+  }
+}
+
+/** Adds a built-in song (or finds the copy already in the library). */
 export async function addBuiltInToLibrary(id: string): Promise<number> {
+  const existing = await db.songs.filter((r) => r.builtinId === id).first()
+  if (existing?.id !== undefined) return existing.id
   const s = builtInSong(id)!
-  return createSong({ title: s.title, bpm: s.bpm, beatsPerBar: s.beatsPerBar, melody: s.melody, chords: s.chords, key: s.key, source: 'builtin' })
+  return createSong({
+    title: s.title,
+    bpm: s.bpm,
+    beatsPerBar: s.beatsPerBar,
+    melody: s.melody,
+    chords: s.chords,
+    key: s.key,
+    source: 'builtin',
+    builtinId: s.id,
+    lyricsText: s.lyrics,
+    roundOffset: s.roundOffset,
+    selectedPart: s.kind === 'singalong' ? (s.roundOffset ? 'round' : 'melody') : 'thirdAbove',
+  })
 }
 
 export function songLength(song: Pick<SongRow, 'melody' | 'beatsPerBar'>): number {
@@ -73,14 +107,24 @@ export function songLength(song: Pick<SongRow, 'melody' | 'beatsPerBar'>): numbe
  * suit the singer's range; with one it stays in the record's key.
  */
 export function songPiece(song: SongRow, part: PartKind, range: { low: number; high: number } | null): Piece {
-  const target = song.parts[part] ?? generatePart(part, song.melody, { key: song.key, beatsPerBar: song.beatsPerBar, chords: song.chords })
+  const opts = harmonyOptions(song)
+  const target = song.parts[part] ?? generatePart(part, song.melody, opts)
+  const offset = part === 'round' ? (song.roundOffset ?? 0) : 0
+  const lyrics = song.lyricsText ? alignLyrics(song.melody, song.lyricsText).lines : undefined
   const piece: Piece = {
     bpm: song.bpm,
     beatsPerBar: song.beatsPerBar,
-    lengthBeats: songLength(song),
-    melody: song.melody,
+    lengthBeats: Math.ceil((songLength(song) + offset) / song.beatsPerBar) * song.beatsPerBar,
+    // Singing the tune itself: the guide plays it, so no separate melody lane.
+    melody: part === 'melody' ? [] : song.melody,
     target,
     chords: song.backing ? undefined : song.chords.length ? song.chords : undefined,
+    // Words follow the singer's own part (a round's second voice comes in later).
+    lyrics: lyrics?.map((l) => ({
+      start: l.start + offset,
+      end: l.end + offset,
+      syllables: l.syllables.map((x) => ({ ...x, start: x.start + offset, end: x.end + offset })),
+    })),
   }
   if (!range || song.backing) return piece
   return fitPieceToRange(piece, range.low, range.high).piece

@@ -1,7 +1,7 @@
 // Suggests a key from the notes, using the Krumhansl-Kessler key profiles
 // correlated against a duration-weighted pitch-class histogram.
 
-import { chordPcs, parseChord } from './theory'
+import { chordPcs, parseChord, scalePcs } from './theory'
 import type { ChordEvent, Key, Note } from './types'
 
 const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -30,22 +30,31 @@ export function rankKeys(notes: Note[], chords: ChordEvent[] = []): KeyGuess[] {
   const hist = new Array(12).fill(0)
   for (const n of notes) hist[((Math.round(n.midi) % 12) + 12) % 12] += n.dur
   // Chords, when known, are strong evidence: their notes count, and the
-  // first chord usually is the home chord.
+  // first and last chords are usually the home chord.
   chords.forEach((c, i) => {
     const chord = parseChord(c.symbol)
     if (!chord) return
     for (const pc of chordPcs(chord)) hist[pc] += c.dur * 0.5
-    if (i === 0) hist[chord.root] += c.dur
+    if (i === 0 || i === chords.length - 1) hist[chord.root] += c.dur
   })
   // Slight extra weight for the last note: tunes usually end on home.
   const last = notes.reduce<Note | null>((a, n) => (!a || n.start >= a.start ? n : a), null)
   if (last) hist[((Math.round(last.midi) % 12) + 12) % 12] += 0.5
 
+  // Notes that fall outside a key's scale count against it: two F naturals
+  // in a tune rule out G major even when the G chord dominates.
+  const total = hist.reduce((a, b) => a + b, 0) || 1
+  const outside = (key: Key) => {
+    const pcs = new Set(scalePcs(key))
+    return hist.reduce((s, w, pc) => s + (pcs.has(pc) ? 0 : w), 0) / total
+  }
   const out: KeyGuess[] = []
   for (let tonic = 0; tonic < 12; tonic++) {
     const rot = (p: number[]) => p.map((_, i) => p[(i - tonic + 12) % 12])
-    out.push({ key: { tonic, mode: 'major' }, score: correlate(hist, rot(MAJOR_PROFILE)) })
-    out.push({ key: { tonic, mode: 'minor' }, score: correlate(hist, rot(MINOR_PROFILE)) })
+    for (const [mode, profile] of [['major', MAJOR_PROFILE], ['minor', MINOR_PROFILE]] as const) {
+      const key: Key = { tonic, mode }
+      out.push({ key, score: correlate(hist, rot(profile)) - 2 * outside(key) })
+    }
   }
   return out.sort((a, b) => b.score - a.score)
 }

@@ -14,7 +14,9 @@ import { keyName } from '../../music/theory'
 import type { Key, Note } from '../../music/types'
 import { PieceRunner, type RunOptions } from '../../audio/runner'
 import { getAudioContext } from '../../audio/context'
-import { analyseBacking, loadBackingBuffer, regenerateParts, saveSong, songLength, songPiece, storeBackingFile } from '../../songs/library'
+import { addBuiltInToLibrary, analyseBacking, loadBackingBuffer, regenerateParts, saveSong, songLength, songPiece, storeBackingFile } from '../../songs/library'
+import { SINGALONG_SONGS } from '../../music/songs'
+import { alignLyrics } from '../../music/lyrics'
 import { TOLERANCE_CENTS, tierForLevel } from '../../scoring/pitchState'
 import type { TakeResult } from '../../scoring/score'
 import { rangeOf, useProfile } from '../../state/profile'
@@ -27,36 +29,81 @@ import { TakeView } from '../components/TakeView'
 
 export function SongsScreen() {
   const songs = useLiveQuery(() => db.songs.orderBy('updatedAt').reverse().toArray(), []) ?? []
+  const navigate = useNavigate()
+  const singAlong = async (id: string) => {
+    const songId = await addBuiltInToLibrary(id)
+    navigate(`/songs/${songId}/practice`)
+  }
   return (
     <div className="mx-auto max-w-3xl px-4 pb-16">
       <div className="flex items-center justify-between pt-4">
-        <h1 className="text-2xl font-bold">Your songs</h1>
+        <h1 className="text-2xl font-bold">Songs</h1>
         <Link to="/songs/new" className="inline-flex min-h-12 items-center rounded-2xl bg-spot px-5 font-semibold text-stage">
-          + New song
+          + Add a song
         </Link>
       </div>
-      <p className="mt-1 text-muted">Sing in a tune, import a MIDI file, or type it in. HarmonyLab writes the harmonies.</p>
-      {songs.length === 0 ? (
-        <div className="mt-8 rounded-3xl border border-dashed border-line p-8 text-center text-muted">
-          No songs yet. Add your first with <b>New song</b>, or pick a built-in one there.
-        </div>
-      ) : (
-        <ul className="mt-5 space-y-3">
-          {songs.map((s) => (
-            <li key={s.id} className="flex items-center gap-3 rounded-3xl border border-line bg-surface p-4">
-              <Link to={`/songs/${s.id}`} className="flex-1">
-                <b>{s.title}</b>
-                <span className="block text-sm text-muted">
-                  {keyName(s.key)} · {s.bpm} bpm · {Math.round(songLength(s) / s.beatsPerBar)} bars{s.backing ? ' · backing track' : ''}
+
+      <section className="mt-5" aria-labelledby="singalong-heading">
+        <h2 id="singalong-heading" className="text-lg font-semibold">
+          Sing along
+        </h2>
+        <p className="text-sm text-muted">
+          Songs everyone knows, with the words on screen. Sing the tune, then try a harmony. Rounds let you sing the
+          second voice.
+        </p>
+        <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+          {SINGALONG_SONGS.map((s) => (
+            <li key={s.id}>
+              <button
+                onClick={() => void singAlong(s.id)}
+                className="flex h-full min-h-20 w-full items-center gap-3 rounded-3xl border border-line bg-surface p-4 text-left hover:border-spot/60"
+                data-testid={`singalong-${s.id}`}
+              >
+                <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-spot/15 text-xl text-spot">
+                  {s.roundOffset ? '⟲' : '♪'}
                 </span>
-              </Link>
-              <Link to={`/songs/${s.id}/practice`} className="inline-flex min-h-12 items-center rounded-2xl border border-line bg-surface-2 px-4 font-semibold">
-                Practise
-              </Link>
+                <span className="flex-1">
+                  <b className="block">{s.title}</b>
+                  <span className="block text-sm text-muted">{s.vibe}</span>
+                </span>
+              </button>
             </li>
           ))}
         </ul>
-      )}
+      </section>
+
+      <section className="mt-8" aria-labelledby="mine-heading">
+        <h2 id="mine-heading" className="text-lg font-semibold">
+          Your library
+        </h2>
+        <p className="text-sm text-muted">
+          Your own songs: sing a tune in, or bring a hit with a MIDI file and the song's audio. They stay on this
+          device.
+        </p>
+        {songs.length === 0 ? (
+          <div className="mt-3 rounded-3xl border border-dashed border-line p-8 text-center text-muted">
+            Nothing here yet. Tap <b>Add a song</b>, or sing along to one above.
+          </div>
+        ) : (
+          <ul className="mt-3 space-y-3">
+            {songs.map((s) => (
+              <li key={s.id} className="flex items-center gap-3 rounded-3xl border border-line bg-surface p-4">
+                <Link to={`/songs/${s.id}`} className="min-w-0 flex-1">
+                  <b className="block truncate">{s.title}</b>
+                  <span className="block text-sm text-muted">
+                    {keyName(s.key)} · {s.bpm} bpm · {Math.round(songLength(s) / s.beatsPerBar)} bars
+                    {s.lyricsText ? ' · words' : ''}
+                    {s.backing ? ' · audio' : ''}
+                  </span>
+                </Link>
+                <Link to={`/songs/${s.id}/practice`} className="inline-flex min-h-12 items-center rounded-2xl border border-line bg-surface-2 px-4 font-semibold">
+                  Practise
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   )
 }
@@ -143,7 +190,7 @@ export function SongEditScreen() {
   }
 
   const editingNotes = editing === 'melody' ? song.melody : song.parts[editing] ?? []
-  const parts = availableParts(song.chords.length > 0)
+  const parts = availableParts(song.chords.length > 0, !!song.roundOffset)
 
   return (
     <div className="mx-auto max-w-5xl px-4 pb-16">
@@ -255,6 +302,8 @@ export function SongEditScreen() {
         />
       </section>
 
+      <LyricsSection song={song} update={update} />
+
       <BackingSection song={song} update={update} />
 
       <div className="mt-6">
@@ -286,6 +335,38 @@ function chordsToChart(song: SongRow): string {
     ;(bars[bar] ??= []).push(c.symbol)
   }
   return Array.from({ length: bars.length }, (_, i) => (bars[i] ?? ['C']).join(' ')).join(' | ')
+}
+
+function LyricsSection({ song, update }: { song: SongRow; update: (s: SongRow) => void }) {
+  const text = song.lyricsText ?? ''
+  const check = text.trim() ? alignLyrics(song.melody, text) : null
+  return (
+    <section className="mt-4 rounded-3xl border border-line bg-surface p-5">
+      <h2 className="font-semibold">Words (optional)</h2>
+      <p className="mt-1 text-sm text-muted">
+        Paste the lyrics to see them while you sing. One line of the song per line here. Split words into
+        syllables with a hyphen (<code>to-ge-ther</code>) so each note gets one; use <code>_</code> to hold a syllable
+        over an extra note.
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => update({ ...song, lyricsText: e.target.value })}
+        rows={5}
+        placeholder={'Twin-kle twin-kle lit-tle star\nhow I won-der what you are'}
+        className="mt-3 w-full rounded-2xl border border-line bg-surface-2 p-3 font-mono text-sm"
+        aria-label="Lyrics"
+      />
+      {check && (
+        <p className={`mt-2 text-sm ${check.unusedNotes || check.unusedTokens ? 'text-near' : 'text-good'}`} role="status">
+          {check.unusedTokens
+            ? `▲ ${check.unusedTokens} syllable${check.unusedTokens > 1 ? 's' : ''} more than the tune has notes. Join some with "_" or check the hyphens.`
+            : check.unusedNotes
+              ? `▲ ${check.unusedNotes} note${check.unusedNotes > 1 ? 's' : ''} at the end have no words yet.`
+              : `✓ Every note has its syllable (${check.lines.length} lines).`}
+        </p>
+      )}
+    </section>
+  )
 }
 
 function BackingSection({ song, update }: { song: SongRow; update: (s: SongRow) => void }) {
@@ -380,7 +461,7 @@ export function SongPracticeScreen() {
   const bars = Math.ceil(piece.lengthBeats / piece.beatsPerBar)
   const lastBar = toBar ?? bars
   const loop = { startBeat: (fromBar - 1) * piece.beatsPerBar, endBeat: lastBar * piece.beatsPerBar }
-  const parts = availableParts(song.chords.length > 0)
+  const parts: PartKind[] = ['melody', ...availableParts(song.chords.length > 0, !!song.roundOffset)]
 
   return (
     <div className="mx-auto max-w-5xl px-4 pb-16">

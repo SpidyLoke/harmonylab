@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Midi } from '@tonejs/midi'
-import { readMidi, songFromMidi, toMonophonic } from './midiImport'
+import { midiOnsetsSec, readMidi, songFromMidi, toMonophonic } from './midiImport'
+import { writeMidi, type MidiData } from 'midi-file'
 
 function buildMidi(): ArrayBuffer {
   const midi = new Midi()
@@ -50,5 +51,53 @@ describe('MIDI import', () => {
       { start: 0, dur: 1, midi: 64 },
       { start: 1, dur: 1, midi: 67 },
     ])
+  })
+
+  it('reads karaoke words from a separate lyrics track', () => {
+    // Track 0: tempo; track 1: melody; track 2: karaoke words (like a .kar file).
+    const ppq = 480
+    const notes = [60, 62, 64, 65]
+    const data: MidiData = {
+      header: { format: 1, numTracks: 3, ticksPerBeat: ppq },
+      tracks: [
+        [
+          { deltaTime: 0, meta: true, type: 'setTempo', microsecondsPerBeat: 500000 },
+          { deltaTime: 0, meta: true, type: 'endOfTrack' },
+        ],
+        [
+          { deltaTime: 0, meta: true, type: 'trackName', text: 'Melody' },
+          ...notes.flatMap((m, i) => [
+            { deltaTime: i === 0 ? 0 : 0, channel: 0, type: 'noteOn' as const, noteNumber: m, velocity: 90 },
+            { deltaTime: ppq, channel: 0, type: 'noteOff' as const, noteNumber: m, velocity: 0 },
+          ]),
+          ...Array.from({ length: 6 }, (_, i) => [
+            { deltaTime: 0, channel: 0, type: 'noteOn' as const, noteNumber: 67 + (i % 2), velocity: 90 },
+            { deltaTime: ppq, channel: 0, type: 'noteOff' as const, noteNumber: 67 + (i % 2), velocity: 0 },
+          ]).flat(),
+          { deltaTime: 0, meta: true, type: 'endOfTrack' },
+        ],
+        [
+          { deltaTime: 0, meta: true, type: 'text', text: '@KMIDI KARAOKE FILE' },
+          { deltaTime: 0, meta: true, type: 'text', text: '/Hel' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'lo ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'my ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'friend ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: '\\sing ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'a ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'long ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'song ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'with ' },
+          { deltaTime: ppq, meta: true, type: 'text', text: 'me ' },
+          { deltaTime: 0, meta: true, type: 'endOfTrack' },
+        ],
+      ],
+    }
+    const bytes = new Uint8Array(writeMidi(data))
+    const imp = readMidi(bytes.buffer)
+    expect(imp.lyricEvents.length).toBeGreaterThanOrEqual(10)
+    const song = songFromMidi(imp, imp.suggestedTrack)
+    expect(song.melody).toHaveLength(10)
+    expect(song.lyricsText).toBe('Hel-lo my friend / sing a long song with me')
+    expect(midiOnsetsSec(imp).slice(0, 3)).toEqual([0, 0.5, 1])
   })
 })
